@@ -26,7 +26,7 @@ function _discrete_first_derivative(n)
     sparse(I,J,V)
 end
 
-function drift_estimation(localizations :: Vector{Vector{NTuple{2, Float64}}}, max_dist, max_iters; drift = fill((0.0,0.0), length(localizations)), λ = 0.0, ftol_rel = 1E-6)
+function drift_estimation(localizations :: Vector{Vector{NTuple{2, Float64}}}, max_dist, max_iters; drift = fill((0.0,0.0), length(localizations)), λ = 0.0, ftol_rel = 1E-6, max_frames = length(drift))
         old_matches = 0
         R = _discrete_first_derivative(length(localizations))
         K_R = λ*(R'R)[2:end, 2:end];
@@ -39,7 +39,7 @@ function drift_estimation(localizations :: Vector{Vector{NTuple{2, Float64}}}, m
             @time cl = CellList(framed_points, max_dist, -1)
             
             println("Form normal equations")
-            @time  (K_x,b_x,K_y,b_y) = _build_normal_equations(frames, cl, max_dist)
+            @time  (K_x,b_x,K_y,b_y) = _build_normal_equations(frames, cl, max_dist, max_frames)
             matches = div(sum(Int64, diag(K_x)), 2)
             @show i, matches
             f_rel = (matches - old_matches)/matches
@@ -72,16 +72,16 @@ function zero!(s :: NE)
     end
 end
 
-@inline function _update_ne((s, p, f_i, r_sq), (n, f_j))
-    if f_i < f_j && _squared_dist(p,n) ≤ r_sq
+@inline function _update_ne((s, p, f_i, r_sq, max_frames), (n, f_j))
+    if f_i < f_j && f_j - f_i < max_frames && _squared_dist(p,n) ≤ r_sq
         r = p .- n
         @inbounds s.storage[f_i] = s.storage[f_i] .+ (1.0, 0.0, r[1], r[2])
         @inbounds s.storage[f_j] = s.storage[f_j] .+ (1.0, -1.0, -r[1], -r[2])
     end
-    (s,p,f_i,r_sq)
+    (s,p,f_i,r_sq, max_frames)
 end
     
-function _build_normal_equations(frames, cl, max_dist)
+function _build_normal_equations(frames, cl, max_dist, max_frames = length(frames))
     n = length(frames)
     r_sq = max_dist^2
         
@@ -101,7 +101,7 @@ function _build_normal_equations(frames, cl, max_dist)
         zero!(state)
         
         for (p, _) in ps
-            state = neighbors_fold(_update_ne, (state, p, f_i, r_sq), cl, p)[1]
+            state = neighbors_fold(_update_ne, (state, p, f_i, r_sq, max_frames), cl, p)[1]
         end
         
             lock(K_lock)  
