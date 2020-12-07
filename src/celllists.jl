@@ -1,28 +1,29 @@
-#### Cell lists. Super simple...
+const P2 = NTuple{2, Float64}
+
 @inline _bin_idx(x :: Float64, bin_width :: Float64) = ceil(Int64, x/bin_width)
 
-@inline function _squared_dist(p,n)
-    r = 0.0
-    for i in 1:length(p)
-        r += (p[i]-n[i])^2
-    end
-    r
+@inline function _squared_dist(p :: P2, n :: P2)
+	(p[1] - n[1])^2 + (p[2] - n[2])^2
 end
 
-struct CellList{N}
-    cells :: Dict{NTuple{N, Int64}, Vector{NTuple{N, Float64}}}
+@inline function _squared_dist(p :: P2,n :: Tuple{P2, T}) where{T}
+	(p[1] - n[1][1])^2 + (p[2] - n[1][2])^2
+end
+
+struct CellList{T}
+    cells :: Dict{NTuple{2, Int64}, Vector{Tuple{P2,T}}}
     radius :: Float64
-    function CellList{N}(r) where {N}
-        @assert N == 2 || N == 3
-        new{N}(Dict(), r)
+    sentinel :: T
+    function CellList{T}(radius,s :: T) where {T}
+        new{T}(Dict(), radius, s)
     end
 end
 
-function Base.push!(t :: CellList{N}, p :: NTuple{N, Float64}) where {N}
-    k = _bin_idx.(p, t.radius)
+function add_point!(t :: CellList{T}, p :: Tuple{P2,T}) where {T}
+    k = _bin_idx(p[1][1], t.radius), _bin_idx(p[1][2], t.radius)
 
-    list = if k ∉ keys(t.cells)
-        t.cells[k] = NTuple{N, Float64}[]
+    list = if !haskey(t.cells, k)
+        t.cells[k] = Tuple{P2,T}[]
     else
         t.cells[k]
     end
@@ -30,56 +31,43 @@ function Base.push!(t :: CellList{N}, p :: NTuple{N, Float64}) where {N}
     push!(list, p)
 end
 
-function CellList(points :: Vector{NTuple{N, Float64}}, radius :: Float64) where {N}
-    t = CellList{N}(radius)
+function CellList(points :: Vector{Tuple{P2, T}}, radius :: Float64, s:: T) where {T}
+    t = CellList{T}(radius, s)
     for p in points
-        push!(t, p)
+        add_point!(t, p)
     end
     t
 end
 
-# TODO: Remove duplicate code.
-function neighbor(t :: CellList{2}, p :: NTuple{2, Float64})
+function neighbors_fold(op, state, t :: CellList, p :: P2)
     r_sq = t.radius*t.radius
     offsets = (0,-1,1)
 
-    bin_idx = _bin_idx.(p, t.radius)
-    (f,closest_p) = (false, (Inf, Inf))
-    sq_d_min = r_sq
-    for o_x in offsets, o_y in offsets
-        k = bin_idx .+ (o_x, o_y)
-        if k ∈ keys(t.cells)
-            for n in t.cells[k]
+    b_x = _bin_idx(p[1], t.radius)
+    b_y = _bin_idx(p[2], t.radius)
 
-                if _squared_dist(p,n) < sq_d_min
-                    f = true
-                    sq_d_min = _squared_dist(p,n)
-                    closest_p = n
-                end
+    for o_x in offsets, o_y in offsets
+        k = (b_x + o_x, b_y + o_y)
+        if haskey(t.cells, k)
+            for n in t.cells[k]
+                #if _squared_dist(p,n) <= r_sq
+                    state = op(state, n)
+                #end
             end
         end
     end
-    return f, closest_p
+    state
 end
 
-function neighbor(t :: CellList{3}, p :: NTuple{3, Float64})
-    r_sq = t.radius*t.radius
-    offsets = (0,-1,1)
+struct Nearest
+    p :: P2
+end
 
-    bin_idx = _bin_idx.(p, t.radius)
-    (f,closest_p) = (false, (Inf, Inf, Inf))
-    sq_d_min = r_sq
-    for o_x in offsets, o_y in offsets, o_z in offsets
-        k = bin_idx .+ (o_x, o_y, o_z)
-        if k ∈ keys(t.cells)
-            for n in t.cells[k]
-                if _squared_dist(p,n) < sq_d_min
-                    f = true
-                    sq_d_min = _squared_dist(p,n)
-                    closest_p = n
-                end
-            end
-        end
-    end
-    return f, closest_p
+@inline function (center :: Nearest)((flag, sq_dist, old_nearest), n)
+    sd = _squared_dist(center.p, n)
+    ifelse(sd < sq_dist, (true, sd, n), (flag, sq_dist, old_nearest))
+end
+
+function neighbor(t :: CellList, p :: P2)
+    neighbors_fold(Nearest(p),(false, t.radius^2, ((Inf, Inf), t.sentinel)), t, p )
 end
